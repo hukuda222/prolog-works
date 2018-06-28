@@ -1,0 +1,547 @@
+# 機能とその実装
+
+## 駅と路線を増やす
+    stationとtrain、linkを増やしました。
+
+## 新幹線の実装
+    stationとtrainは、普通の電車と同様に書き、linkの部分だけ代わりにshinlinkを作りました。
+    そして、bilinkを以下のようにすることで、新幹線を使うか使わないかの場合分けをしています。
+
+    bilink(X, Y, Z, US,Time):-link(X, Y, Z,Time);(US is 1,shinlink(X, Y, Z,Time)).
+
+    USが1のときは、linkもshinlinkも使い、USが0の時はlinkのみを使うようにしています。
+
+## リストの代わりに半角スペースで区切った文字列を受け取って、半角スペースで区切った文字列を返すようにする
+    concat_atomを用いて、入力された文字列をリストにしてから処理し、出力するリストを文字列に変換してから出力しています。
+
+## 所要時間を表示する
+    link及び、shinlinkの第三引数に駅間の所要時間を入れました。
+    述語reachBySubを以下のようにして、所要時間をカウントするようにしました。
+
+    reachBySub(From, To, [], Stations, [], Transports,US,0,Cost,ACost,_,_):-
+        bilink(Tr, From, Y,US,Time),NCost is Cost + Time,
+        reachBySub(Y, To, [From], Stations, [[From,Tr]], Transports,US,0,NCost,ACost,_,_).
+    reachBySub(From, To, Ss, Stations, [[Fr,Tr]|FrTrs], Transports,US,0,Cost,ACost,_,_):-
+        not(myMember(From, Ss)),bilink(Tr, From, Y,US,Time),NCost is Cost + Time,
+        reachBySub(Y, To, [From|Ss], Stations, [[Fr,Tr]|FrTrs], Transports,US,0,NCost,ACost,_,_).
+    reachBySub(From, To, Ss, Stations, [[Fr,Tr]|FrTrs], Transports,US,0,Cost,ACost,_,_):-
+        not(myMember(From, Ss)),bilink(Tr1, From, Y,US,Time),not(Tr==Tr1),NCost is Cost + Time,
+        reachBySub(Y, To, [From|Ss], Stations, [[From,Tr1],[Fr,Tr]|FrTrs], Transports,US,0,NCost,ACost,_,_).
+
+    第1~第6引数までは、既存のreachBySubと同じで、第7引数で新幹線を使うかどうか、第8引数で乗り換えの回数でソートするかどうか、
+    第9引数は現在のコスト(所要時間でソートする場合ならばここまでの所要時間)、
+    第10引数は最終的にかかるコスト(所要時間でソートする場合ならばスタートからゴールまでの総所要時間)です。
+    あとは、think関数を以下のように変更すれば、テックちゃんが「〇〇nitsukuyo.」の後に「〇〇hun kakaruyo.」といってくれるようになります。
+
+    think([transport, From, To, US, 0,_,Keyu], [1,1,1], Answer):-
+        var(Keyu),reachBy(From, To, _, Transports_,US,0,ACost,_),myAppend(Transports_,[[To,you_arrived]],Transports),
+        transports2utterance(Transports, Answer_),myAppend(Answer_,[ACost,hun,'kakaruyo.'],Answer),setCost(ACost,Answer).
+
+## 所要時間でソートする
+    上記の方法で総所要時間を求めた後、setCost述語に新たな組み合わせとして(総コスト+1未満の乱数,経路)を登録します。
+    これで、実質他の言語でいう連想配列のようにしてこれらの情報を扱えるようになります。
+    setCost述語は、前述のthink述語で呼ばれています。
+
+    setCost(C,W):-
+        nonvar(C),NC is C+(random(10000)/10001),nonvar(W),retract(cost(NC,_)),!, asserta(cost(NC,W)).
+    setCost(C,W):-
+        nonvar(C),NC is C+(random(10000)/10001),nonvar(W),asserta(cost(NC,W)).
+    allCostDelete():-abolish(cost,2).
+
+    recognizeの後の機能はcategrize述語で分割しています。
+
+    categorize([transport,From,To,US,Nori,PN,Keyu], Flags):-
+        putAA(tech),writeln('\ntech chan:'),
+        (nonvar(US);US is 1),(nonvar(Nori);Nori is 0),(nonvar(PN);PN is 3),
+        transport_answer([transport,From,To,US,Nori,PN,Keyu], Flags),
+        allCostDelete(),!.
+
+    (nonvar(US);US is 1),(nonvar(Nori);Nori is 0),(nonvar(PN);PN is 3)の部分の処理は
+    新幹線を使えばUSを1に、乗り換え順でソートするならNoriを1に、表示させる候補の数が指定されて入ればそれをPNに入れているので、
+    それらが未束縛だった場合は標準の値を設定しています。
+    そして、そこで呼ばれるtransport_answerがこちらです。
+
+    transport_answer(Slots, Flags):-
+        findall(Answer,think(Slots, Flags, Answer),AnswerList),
+        findall(Cost,cost(Cost,_),CostList),quickSort(CostList,SCostList),pickOne(Slots,5,PutNum),
+        pickPart(SCostList,PutNum,SSCostList),transport_show(AnswerList,SSCostList).
+
+    findallで全ての候補を列挙し、ソートしています。AnswerListが経路候補のリスト、CostListがそれぞれの経路の各コストのリストです。
+    CostListをソートしたものがSCostListです。
+    そして、Slotsの5番目の要素が、候補をどれだけ表示するかというのを示す数なのでそれをPutNumとしています。
+    pickPartでSCostListの上からPutNum個取り出したのが、SSCostListです。
+    そしてtransport_showで候補を全て表示します。
+
+    transport_show(AnswerList,[Cost|SSCostList]):-
+        cost(Cost,Answer),concat_atom(['\n'|Answer], ' ', AnswerStr),writeln(AnswerStr),
+        transport_show(AnswerList,SSCostList).
+    transport_show(_,[]).
+
+    再帰的に候補を表示しています。
+    新しく作って使った汎用的な述語はtechchan4.proの下の方で定義しています。
+
+## 乗り換え順でもソートできるようにする
+    異なる路線に乗り換えた時にコストを+1するようにしました。
+    所要時間の出力はしたいので、別にやっています。
+
+    reachBySub(From, To, Ss, Stations, [[Fr,Tr]|FrTrs], Transports,US,1,Cost,ACost,T,AT):-
+        not(myMember(From, Ss)),bilink(Tr1, From, Y,US,Time),not(Tr==Tr1),NCost is Cost + 1,NT is T+Time,
+        reachBySub(Y, To, [From|Ss], Stations, [[From,Tr1],[Fr,Tr]|FrTrs], Transports,US,1,NCost,ACost,NT,AT).
+
+## 経由の実装
+    A to BとB to Cを実行して、最後に繋げています。
+    Keyuが束縛されていなければ、経由駅なしとしています。
+
+    think([transport, From, To, US, 1,_,Keyu], [1,1,1], Answer):-
+        nonvar(Keyu),reachBy(From, Keyu, _, Transports1,US,1,ACost,Time1),
+        reachBy(Keyu, To, _, Transports2,US,1,BCost,Time2),myAppend(Transports1,Transports2,ATransports_),
+        myAppend(ATransports_,[[To,you_arrived]],ATransports),transports2utterance(ATransports, Answer_),
+        CCost is ACost+BCost,Time3 is Time1+Time2,myAppend(Answer_,[Time3,hun,'kakaruyo.'],Answer),setCost(CCost,Answer).
+    think([transport, From, To, US, 0,_,Keyu], [1,1,1], Answer):-
+        nonvar(Keyu),reachBy(From, Keyu, _, Transports1,US,0,ACost,_),
+        reachBy(Keyu, To, _, Transports2,US,0,BCost,_),myAppend(Transports1,Transports2,ATransports_),
+        myAppend(ATransports_,[[To,you_arrived]],ATransports),transports2utterance(ATransports, Answer_),
+        CCost is ACost+BCost,myAppend(Answer_,[CCost,hun,'kakaruyo.'],Answer),setCost(CCost,Answer).
+
+    think([transport, From, To, US, 1,_,Keyu], [1,1,1], Answer):-
+        var(Keyu),reachBy(From, To, _, Transports_,US,1,ACost,Time),myAppend(Transports_,[[To,you_arrived]],Transports),
+        transports2utterance(Transports, Answer_),myAppend(Answer_,[Time,hun,'kakaruyo.'],Answer),setCost(ACost,Answer).
+    think([transport, From, To, US, 0,_,Keyu], [1,1,1], Answer):-
+        var(Keyu),reachBy(From, To, _, Transports_,US,0,ACost,_),myAppend(Transports_,[[To,you_arrived]],Transports),
+        transports2utterance(Transports, Answer_),myAppend(Answer_,[ACost,hun,'kakaruyo.'],Answer),setCost(ACost,Answer).
+
+## AAを表示する
+    writelnで出力するだけです
+
+## 特定のキーワードに反応する
+    reactwords(A,B).
+    Aが入力された時に含むリスト、Bが出力するリストです。
+    こんな感じに取っています。
+    think([conv, W, _,_],_, Answer):-reactwords([W], Answer).
+    think([conv, W, Z._],_, Answer):-reactwords([W,Z], Answer).
+    think([conv, W, Z,P],_, Answer):-reactwords([W,Z,P], Answer).
+
+
+## 述語のdelta遷移の自由度を高くする
+    状態数を増やし、初期状態からヒットしない言葉が来た場合にもう一度初期状態に戻ったりできるようにしました。
+    最終状態を10に増やしています。
+
+    delta(4, _, 4, [transport|_], _).
+    delta(4, _, 10, [transport|_], _).
+    delta(0, _, 0, _ ,_).
+    delta(10, _, 10, _ ,_).
+
+## RPGの実装
+    RPGの処理は、tequest述語で行なっていますが本質的に一番複雑なのはモンスターとバトルさせる述語です。
+    最初に自分がスキルを使って、相手のHPが1未満なら勝ち、自分のHPが1未満なら負け、そうでないなら相手の攻撃、
+    次に相手がスキルを使って、相手のHPが1未満なら勝ち、自分のHPが1未満なら負け、そうでないならまた自分の攻撃という処理をしています。
+
+    battle(_,MyHp,EneHp,MyHp):-EneHp<1.
+    battle(Enemy,MyHp,EneHp,RestHp,Level):-
+        EneHp>0,
+        format('\ntech chan: ~d, ~a:~d [0:attack,1:cure,2:super_attack]\n\n[select one action]\n\n', [MyHp, Enemy, EneHp]),
+        commandGet(N),
+        skill(Level,techchan,N,Com1,Dam1,RDam1),
+        format('\n~d: tech chan no ~a! ~a ni ~d damage\n', [N, Com1, Enemy,Dam1]),
+        NEneHp_ is EneHp - Dam1,
+        NMyHp_ is MyHp - RDam1,
+        (NMyHp_ < 1 -> format('\ntech chan ha taoreta!'),1 is 0 ;
+            (NEneHp_ < 1 -> format('\n~a wo taoshita!',[Enemy]),battle(Enemy,NMyHp_,NEneHp_,RestHp);
+                enemy(Enemy,EN),
+                skill(Enemy,EN,Com2,Dam2,RDam2),
+                format('\n~a no ~a! tech chan ni ~d damage\n', [Enemy,Com2,Dam2]),
+                NEneHp is NEneHp_ - RDam2,
+                NMyHp is NMyHp_-Dam2,
+                (NMyHp < 1 -> format('\ntech chan ha taoreta!'),1 is 0 ;
+                    (NEneHp < 1 -> format('\n~a wo taoshita!',[Enemy]),battle(Enemy,NMyHp,NEneHp,RestHp,Level)
+                        ; battle(Enemy,NMyHp,NEneHp,RestHp,Level))))).
+    battleの第1引数は、敵の種類、第2引数は自分の現在のHP、第3引数は相手の現在のHP、第4引数は自分のバトル終了時のHP、第5引数は、
+    自分のバトル開始時のレベルです。
+    ここで使われている述語は、techchan4.proを見てください。
+
+
+# 拡張機能の使用例(あまりにも長くなるため、AAと改行は省略します)
+
+## 候補を所要時間でソートして、入力個数分出す機能
+
+### 入力1-1
+techchan("oookayama kara shibuya 1 ko dahite",_).
+### 出力1-1
+tech chan:
+ oookayama kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte shibuya ni tsukeruyo. 16 hun kakaruyo.
+### 入力1-2
+techchan("kikuna kara yokohama tokorde 2 kode",_).
+### 出力1-2
+tech chan:
+ kikuna kara toyokosen ninotte yokohama ni tsukeruyo. 10 hun kakaruyo.
+ kikuna kara yokohamasen ninotte yokohama ni tsukeruyo. 12 hun kakaruyo.
+### 入力1-3
+techchan("a, oookayama kara shibuya 3 ko kouho dashitene",_).
+### 出力1-3
+tech chan:
+ oookayama kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte shibuya ni tsukeruyo. 16 hun kakaruyo.
+ oookayama kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte shibuya ni tsukeruyo. 17 hun kakaruyo.
+ oookayama kara ooimachisen ninotte futakotamagawa kara denentoshisen ninotte shibuya ni tsukeruyo. 24 hun kakaruyo.
+### 入力1-4
+techchan("akihabara kara shibuya made ikitai na 4",_).
+### 出力1-4
+tech chan:
+ akihabara kara yamanotesen ninotte shibuya ni tsukeruyo. 26 hun kakaruyo.
+ akihabara kara yamanotesen ninotte ueno kara tohoku_shinkansen ninotte tokyo kara yamanotesen ninotte shibuya ni tsukeruyo. 30 hun kakaruyo.
+ akihabara kara yamanotesen ninotte ueno kara ginzasen ninotte shibuya ni tsukeruyo. 31 hun kakaruyo.
+ akihabara kara yamanotesen ninotte shibuya ni tsukeruyo. 35 hun kakaruyo.
+### 入力1-5
+techchan("shinyokohama kara yokohama 5",_).
+### 出力1-5
+tech chan:
+ shinyokohama kara blueline ninotte yokohama ni tsukeruyo. 11 hun kakaruyo.
+ shinyokohama kara yokohamasen ninotte kikuna kara toyokosen ninotte yokohama ni tsukeruyo. 24 hun kakaruyo.
+ shinyokohama kara yokohamasen ninotte yokohama ni tsukeruyo. 26 hun kakaruyo.
+ shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara yamanotesen ninotte gotanda kara ikegamisen ninotte hatanodai kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte yokohama ni tsukeruyo. 74 hun kakaruyo.
+ shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara yamanotesen ninotte gotanda kara ikegamisen ninotte hatanodai kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte kikuna kara yokohamasen ninotte yokohama ni tsukeruyo. 76 hun kakaruyo.
+
+## 新幹線を使わない機能(標準では新幹線を使います)
+
+### 入力2-1
+techchan("shinyokohama kara shibuya shinkansen wo tsukawazuni",_).
+### 出力2-1
+tech chan:
+ shinyokohama kara yokohamasen ninotte kikuna kara toyokosen ninotte shibuya ni tsukeruyo. 46 hun kakaruyo.
+ shinyokohama kara blueline ninotte yokohama kara toyokosen ninotte shibuya ni tsukeruyo. 53 hun kakaruyo.
+ shinyokohama kara yokohamasen ninotte kikuna kara toyokosen ninotte jiyugaoka kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte shibuya ni tsukeruyo. 53 hun kakaruyo.
+### 入力2-2
+techchan("shinyokohama kara oookayama shinkansen wo tsukawazuni",_).
+### 出力2-2
+tech chan:
+ shinyokohama kara yokohamasen ninotte kikuna kara toyokosen ninotte jiyugaoka kara ooimachisen ninotte oookayama ni tsukeruyo. 36 hun kakaruyo.
+ shinyokohama kara blueline ninotte yokohama kara toyokosen ninotte jiyugaoka kara ooimachisen ninotte oookayama ni tsukeruyo. 43 hun kakaruyo.
+ shinyokohama kara blueline ninotte yokohama kara yokohamasen ninotte kikuna kara toyokosen ninotte jiyugaoka kara ooimachisen ninotte oookayama ni tsukeruyo. 45 hun kakaruyo.
+### 入力2-3
+techchan("shinagawa kara tokyo shinkansen wo tsukawazuni",_).
+### 出力2-3
+tech chan:
+ shinagawa kara yamanotesen ninotte tokyo ni tsukeruyo. 11 hun kakaruyo.
+ shinagawa kara yamanotesen ninotte shibuya kara ginzasen ninotte ueno kara yamanotesen ninotte tokyo ni tsukeruyo. 46 hun kakaruyo.
+ shinagawa kara yamanotesen ninotte tokyo ni tsukeruyo. 50 hun kakaruyo.
+### 入力2-4
+techchan("ueno kara tokyo shinkansen wo tsukawazuni",_).
+### 出力2-4
+tech chan:
+ ueno kara yamanotesen ninotte tokyo ni tsukeruyo. 7 hun kakaruyo.
+ ueno kara ginzasen ninotte shibuya kara yamanotesen ninotte tokyo ni tsukeruyo. 50 hun kakaruyo.
+ ueno kara yamanotesen ninotte tokyo ni tsukeruyo. 54 hun kakaruyo.
+### 入力2-5
+techchan("ueno kara shinagawa shinkansen wo tsukawazuni",_).
+### 出力2-5
+tech chan:
+ ueno kara yamanotesen ninotte shinagawa ni tsukeruyo. 18 hun kakaruyo.
+ ueno kara ginzasen ninotte shibuya kara yamanotesen ninotte shinagawa ni tsukeruyo. 39 hun kakaruyo.
+ ueno kara yamanotesen ninotte shinagawa ni tsukeruyo. 43 hun kakaruyo.
+
+## 東工大に関したり関さなかったりするキーワードに反応する機能
+
+### 入力3-1
+ techchan("kimi kawaii ne",_).
+### 出力3-1
+tech chan:
+ terechauyo arigato.
+### 入力3-2
+techchan("msm tte shitteru ?",_).
+### 出力3-2
+tech chan:
+ zenninno mishima gakuchou no kotodayone.
+### 入力3-3
+techchan("kino cocoro tabetandakedo",_).
+### 出力3-3
+tech chan:
+ taiwan_mazesoba cocoro ha oishiiyo. shio mazesoba ga sukinanda.
+### 入力3-4
+techchan("kimino na ha",_).
+### 出力3-4
+tech chan:
+ konnichiwa boku tokodai no techchan desu.
+### 入力3-5
+techchan("shokudo doko tukatteru ?",_).
+### 出力3-5
+tech chan:
+ ichishoku no toritendon ga oishiiyo.
+
+## 乗り換えが少ない順に出力する機能
+
+### 入力4-1
+techchan("chuorinkan kara ueno norikae",_).
+### 出力4-1
+tech chan:
+ chuorinkan kara denentoshisen ninotte shibuya kara ginzasen ninotte ueno ni tsukeruyo. 68 hun kakaruyo.
+ chuorinkan kara denentoshisen ninotte shibuya kara yamanotesen ninotte ueno ni tsukeruyo. 69 hun kakaruyo.
+ chuorinkan kara denentoshisen ninotte shibuya kara yamanotesen ninotte ueno ni tsukeruyo. 72 hun kakaruyo.
+### 入力4-2
+techchan("shibuya kara yokohama norikae",_).
+### 出力4-2
+tech chan:
+ shibuya kara toyokosen ninotte yokohama ni tsukeruyo. 42 hun kakaruyo.
+ shibuya kara toyokosen ninotte kikuna kara yokohamasen ninotte yokohama ni tsukeruyo. 44 hun kakaruyo.
+ shibuya kara denentoshisen ninotte nagatsuta kara yokohamasen ninotte yokohama ni tsukeruyo. 60 hun kakaruyo.
+### 入力4-3
+techchan("oookayama kara shibuya norikae",_).
+### 出力4-3
+tech chan:
+ oookayama kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte shibuya ni tsukeruyo. 16 hun kakaruyo.
+ oookayama kara ooimachisen ninotte futakotamagawa kara denentoshisen ninotte shibuya ni tsukeruyo. 24 hun kakaruyo.
+ oookayama kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte shibuya ni tsukeruyo. 64 hun kakaruyo.
+### 入力4-4
+techchan("meguro kara shinagawa norikae",_).
+### 出力4-4
+tech chan:
+ meguro kara yamanotesen ninotte shinagawa ni tsukeruyo. 55 hun kakaruyo.
+ meguro kara yamanotesen ninotte shinagawa ni tsukeruyo. 6 hun kakaruyo.
+ meguro kara yamanotesen ninotte ueno kara tohoku_shinkansen ninotte tokyo kara yamanotesen ninotte shinagawa ni tsukeruyo. 53 hun kakaruyo.
+### 入力4-5
+techchan("akihabara kara meguro norikae",_).
+### 出力4-5
+tech chan:
+ akihabara kara yamanotesen ninotte meguro ni tsukeruyo. 21 hun kakaruyo.
+ akihabara kara yamanotesen ninotte meguro ni tsukeruyo. 40 hun kakaruyo.
+ akihabara kara yamanotesen ninotte tokyo kara tohoku_shinkansen ninotte ueno kara yamanotesen ninotte meguro ni tsukeruyo. 46 hun kakaruyo.
+
+## 経由の実装
+
+### 入力5-1
+techchan("akihabara kara meguro oookayama keiyude",_).
+### 出力5-1
+tech chan:
+ akihabara kara yamanotesen ninotte gotanda kara ikegamisen ninotte hatanodai kara ooimachisen ninotte oookayama kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte meguro ni tsukeruyo. 41 hun kakaruyo.
+ akihabara kara yamanotesen ninotte ueno kara tohoku_shinkansen ninotte tokyo kara yamanotesen ninotte gotanda kara ikegamisen ninotte hatanodai kara ooimachisen ninotte oookayama kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte meguro ni tsukeruyo. 45 hun kakaruyo.
+ akihabara kara yamanotesen ninotte gotanda kara ikegamisen ninotte hatanodai kara ooimachisen ninotte oookayama kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte shibuya kara yamanotesen ninotte meguro ni tsukeruyo. 50 hun kakaruyo.
+### 入力5-2
+techchan("shibuya kara yokohama akihabara",_).
+### 出力5-2
+tech chan:
+ shibuya kara yamanotesen ninotte akihabara kara yamanotesen ninotte tokyo kara tokaido_sanyo_shinkansen ninotte shinyokohama kara blueline ninotte yokohama ni tsukeruyo. 58 hun kakaruyo.
+ shibuya kara yamanotesen ninotte akihabara kara yamanotesen ninotte ueno kara tohoku_shinkansen ninotte tokyo kara tokaido_sanyo_shinkansen ninotte shinyokohama kara blueline ninotte yokohama ni tsukeruyo. 62 hun kakaruyo.
+ shibuya kara yamanotesen ninotte tokyo kara tohoku_shinkansen ninotte ueno kara yamanotesen ninotte akihabara kara yamanotesen ninotte tokyo kara tokaido_sanyo_shinkansen ninotte shinyokohama kara blueline ninotte yokohama ni tsukeruyo. 62 hun kakaruyo.
+### 入力5-3
+techchan("kikuna kara chuorinkan tokyo",_).
+### 出力5-3
+tech chan:
+ kikuna kara yokohamasen ninotte shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara tokaido_sanyo_shinkansen ninotte shinyokohama kara yokohamasen ninotte nagatsuta kara denentoshisen ninotte chuorinkan ni tsukeruyo. 88 hun kakaruyo.
+ kikuna kara yokohamasen ninotte shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara yamanotesen ninotte shibuya kara denentoshisen ninotte futakotamagawa kara ooimachisen ninotte mizonoguchi kara denentoshisen ninotte chuorinkan ni tsukeruyo. 93 hun kakaruyo.
+ kikuna kara yokohamasen ninotte shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara yamanotesen ninotte shibuya kara denentoshisen ninotte chuorinkan ni tsukeruyo. 93 hun kakaruyo.
+### 入力5-4
+techchan("futakotamagawa kara yokohama mizonoguchi",_).
+### 出力5-4
+tech chan:
+ futakotamagawa kara ooimachisen ninotte mizonoguchi kara denentoshisen ninotte futakotamagawa kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte yokohama ni tsukeruyo. 41 hun kakaruyo.
+ futakotamagawa kara denentoshisen ninotte mizonoguchi kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte yokohama ni tsukeruyo. 41 hun kakaruyo.
+ futakotamagawa kara denentoshisen ninotte mizonoguchi kara denentoshisen ninotte futakotamagawa kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte yokohama ni tsukeruyo. 41 hun kakaruyo.
+### 入力5-5
+techchan("midorigaoka kara ueno hiyoshi",_).
+### 出力5-5
+tech chan:
+ midorigaoka kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte hiyoshi kara toyokosen ninotte kikuna kara yokohamasen ninotte shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara tohoku_shinkansen ninotte ueno ni tsukeruyo. 57 hun kakaruyo.
+ midorigaoka kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte hiyoshi kara toyokosen ninotte kikuna kara yokohamasen ninotte shinyokohama kara tokaido_sanyo_shinkansen ninotte tokyo kara yamanotesen ninotte ueno ni tsukeruyo. 59 hun kakaruyo.
+ midorigaoka kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte hiyoshi kara toyokosen ninotte jiyugaoka kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte tokyo kara tohoku_shinkansen ninotte ueno ni tsukeruyo. 61 hun kakaruyo.
+
+## delta述語の自由度を高くする
+### 入力6-1
+techchan("oooo oookayama kara hiyoshi made itte kiteneeeee hogehoge poyo norikae",_).
+### 出力6-1
+tech chan:
+ oookayama kara ooimachisen ninotte jiyugaoka kara toyokosen ninotte hiyoshi ni tsukeruyo. 16 hun kakaruyo.
+ oookayama kara ooimachisen ninotte mizonoguchi kara denentoshisen ninotte nagatsuta kara yokohamasen ninotte kikuna kara toyokosen ninotte hiyoshi ni tsukeruyo. 52 hun kakaruyo.
+ oookayama kara ooimachisen ninotte hatanodai kara ikegamisen ninotte gotanda kara yamanotesen ninotte shibuya kara toyokosen ninotte hiyoshi ni tsukeruyo. 43 hun kakaruyo.
+### 入力6-2
+techchan("tech chan meccha kawaii kawaiiiiiiiiiii",_).
+### 出力6-2
+tech chan:
+ terechauyo arigato.
+### 入力6-3
+techchan("poyopoyo ookayama tte shitteru hogehoge",_).
+### 出力6-3
+tech chan:
+ ookayama zyanaiyo oookayama dayo.
+### 入力6-4
+techchan("aaaaaaaaa kara bbbbbbbbbb",_).
+### 出力6-4
+tech chan:
+ eki ga toroku saretenaika , nyuryoku_keishiki ga okashiiyo.
+### 入力6-5
+techchan("hogehoge yokohama kara tokyo bbb norikae poyo shinkansen wo tsukawazuni",_).
+### 出力6-5
+tech chan:
+ yokohama kara toyokosen ninotte shibuya kara yamanotesen ninotte tokyo ni tsukeruyo. 64 hun kakaruyo.
+ yokohama kara toyokosen ninotte shibuya kara yamanotesen ninotte tokyo ni tsukeruyo. 81 hun kakaruyo.
+ yokohama kara yokohamasen ninotte kikuna kara toyokosen ninotte shibuya kara yamanotesen ninotte tokyo ni tsukeruyo. 83 hun kakaruyo.
+
+## RPGの実装(ここはほとんどAAなので、AAを表示します)
+
+### 入力画面7-1
+初期画面
+### 入力7-1
+techchan("tequest",_).
+### 出力7-1
+
+
+
+  %@#@#@#%$           %&%&%&                                ..
+    JM3            .MD!   JMF                             .dM"
+   JM^  &(X""WNJ  JM^    .M#`Jg~   .ge ..JY""Na, ..yYT0 QAMM8Z"
+  JM3  MM!   .MF dM^    .M#`JM|   .MM!.M@    JM|.MN,.   .MM!
+ gM?  MM!"""""" JM|    .M@ (M%   .MM!.MF"""""""  .7MM% .MM!
+dM^   THkJzT"`  ?WN+JdT"!  ?WH&&7T"` ,"B&JZ"= .S%&d9^  MH!
+                  "!?TM%
+
+                               `
+
+
+[press Enter Key]
+### 入力画面7-2
+上のタイトル画面
+### 入力7-2
+(EnterKeyを押すだけ)
+### 出力7-2
+``__.____........................~..~.~..~~~~~~~_~
+..................._((--(--(----..-.....--__...__~
+~~..~.........-.-JwXwywwXAXWWksw+_..~..~..~~.~~~~.
+.............(JdXWHHWBYYYC<<<<?7OC_......~....~..~
+.~.~~~~~....(dWWWUOz<:___~~~~~~~(++<_.~.~.~....~~.
+....... ....XHHUrtz=?>>;:;::~~~~_(1wA+..-...--_...
+........`.-udWXrrrOz>;:<;;_~~~~_~(+zOX_..~~~~~~~~~
+.......`. jHNkXuwuQma&z+<+zzwXwz-:<XQf_.~~~.~~~~~~
+~.........-@WNXXUUZllIOdIj0wAa+-((JdMR_~...~..~~.~
+-...... .` dMHV0OUHWSVXHCjVO0VIz>;:j0Z__________..
+..~.......-XWkZzwvI1<+z0>~<<><:<~~:jI<..~~~~~~~~~~
+..........`?WHOOOz1?+uVXz__<zO+_(_::<<..~..~~~~.~~
+~...........W9OXwXOzdHWHSVvC>zXO=z<:_~.~~.~~.~~~~~
+   ....`.```(ZwXyXwXXXXwzz+++zzZ??>;<!___________~
+.~.~..........wZyyyZUHMkyyzZ6<zI??1=!....~~.~...~.
+~..~..........jfWVWXzXUUwOI<::<====>........~~~~~~
+.~...~~.......`?pVppkXO==><;<+1=z?u,..............
+ ```````      `-JWppbqkkAwwOttl=>:-bn.-....~..~~.~
+......`..`. ..(W#?UppVWyuvrtllzv! Jbppffk&-.......
+..```. ..gW@Hg@@#:<?TUwVVOOtZ!`  .HkbpppfppWWyyXA&
+ ..(JXHgggmgg@@MNz;;:_.?11v^     JgHkbppbpppbpppWW
+WWHmmmmgmNHg@M@HHr~~~:_ .&.      dkkkkHWHHppppbkqk
+g@@gggggg@MM@@@@@]...__JMHSe.`  .HHkkkkbbpppppbbkq
+
+king:
+ techchan yo. tokodai wo monster kara sukuttekure.
+
+[press Enter Key]
+### 入力画面7-3
+上のkingが表示されてる画面
+### 入力7-3
+(EnterKeyを押すだけ)
+### 出力7-3
+`.`     ``.   .-dWHHQkWWWkkQQQkZZUS.. .((-..  ``.
+           .(kWHWyyQWHWWkkyZZyNHkZZZXS...._<<.
+    ```  .JHQkWpWMWQkXZZuZZWHkhHkHkZZZOu&<<___
+       JNWHZZZuZuZuZZZuZZuZZuZUHkHkHkZ&++?G+. ...
+```   (WHZZuZZZuZZZuZZuZZuZuZZZZXHkHWkZWkwZZZkkY~
+     .WSZZuZuZZZuZZuZZuZZZZZuZuZZZXHKXHR?kZuuuuqS
+  ...WZZZuZZZ0VT777<<<<<+(+nJ+uXn+dZWky@?zHZZXXdX
+XUZZXQQX977<~~~~((JuwuZZZZZZZZWkZZZZXkWkb?dHZQ81HZ
+V"=(Y7<~~~~-(+wuZZuZXRZuZZXWWWUZHkuZZZHWbzKZX3?dSZ
+ .t~~~_(JXXZZuZuZZZZXkkuZuZuZZZuXkZZuZHNdWKugHWWf
+ J~_(duZK9YWZZZZuZuZuX2__<??CXWXY"UZZZXkyZWHkWpWW
+ $JZZZZXI-?!?WZZZuZZZuXo`.J94JZVWHe4ZZZHH#XmmQQAd
+.HZZZuZXr_`` .(4XZZuXZZXL_E.RrtrrdJbWZZXHWKpppppW
+,SuZKZuZr ``.ZWMMNXZZHWkXh. SrtO+.<%OZuX.WpfpHe.
+..HZXZZZZh_`J$JrtrU/(7XXe. ``.4wwwZ!`JZZWHpppfppWH
+ HXHZuZuXO,d;jrri...```_7!``` .-~~_`JZXNfpWY"""7"
+.dWZZZZXZb(nT,4yrwZ ``````````````.(#ZdHYYUW. ```
+J(HZuZuWkdHah`....`````.``.`.```.,YWSXBWHn,```
+I(XZZuZdWHWR+__` ``.``. `.7```.J:iJWVG.   Tk,`
+0duZWZZPHppMHh,.````````   .-3+7!(Y^..(1 `  ?X+..
+_JUZZKZX`.WfWTWpb?77<<?dI<?!(?`  _.(!`.4J{.    (1Z
+
+
+techchan:
+ wakatta. makasete!
+
+[press Enter Key]
+
+### 入力画面7-4
+上の画面から、Enterを二回押した以下の画面
+　　　 ∩
+　　　ノヽ
+　　／　　＼
+　 / (･)(･)∧
+　｜(ヽ＿ノ)｜
+　 ＼二二二／
+
+slime ga arawareta!
+
+tech chan: 20, slime:10 [0:attack,1:cure,2:super_attack]
+
+[select one action]
+
+### 入力7-4
+0
+### 出力7-4
+0: tech chan no attack! slime ni 5 damage
+
+slime no attack! tech chan ni 3 damage
+
+tech chan: 17, slime:5 [0:attack,1:cure,2:super_attack]
+
+[select one action]
+
+### 入力画面7-5
+上の画面
+### 入力7-5
+2
+### 出力7-5
+2: tech chan no super_attack! slime ni 10 damage
+
+slime wo taoshita!
+
+tech chan no level ga 2 ni natta!
+
+tech chan no hp ga 17 ni natta.
+
+`.`     ``.   .-dWHHQkWWWkkQQQkZZUS.. .((-..  ``.
+           .(kWHWyyQWHWWkkyZZyNHkZZZXS...._<<.
+    ```  .JHQkWpWMWQkXZZuZZWHkhHkHkZZZOu&<<___
+       JNWHZZZuZuZuZZZuZZuZZuZUHkHkHkZ&++?G+. ...
+```   (WHZZuZZZuZZZuZZuZZuZuZZZZXHkHWkZWkwZZZkkY~
+     .WSZZuZuZZZuZZuZZuZZZZZuZuZZZXHKXHR?kZuuuuqS
+  ...WZZZuZZZ0VT777<<<<<+(+nJ+uXn+dZWky@?zHZZXXdX
+XUZZXQQX977<~~~~((JuwuZZZZZZZZWkZZZZXkWkb?dHZQ81HZ
+V"=(Y7<~~~~-(+wuZZuZXRZuZZXWWWUZHkuZZZHWbzKZX3?dSZ
+ .t~~~_(JXXZZuZuZZZZXkkuZuZuZZZuXkZZuZHNdWKugHWWf
+ J~_(duZK9YWZZZZuZuZuX2__<??CXWXY"UZZZXkyZWHkWpWW
+ $JZZZZXI-?!?WZZZuZZZuXo`.J94JZVWHe4ZZZHH#XmmQQAd
+.HZZZuZXr_`` .(4XZZuXZZXL_E.RrtrrdJbWZZXHWKpppppW
+,SuZKZuZr ``.ZWMMNXZZHWkXh. SrtO+.<%OZuX.WpfpHe.
+..HZXZZZZh_`J$JrtrU/(7XXe. ``.4wwwZ!`JZZWHpppfppWH
+ HXHZuZuXO,d;jrri...```_7!``` .-~~_`JZXNfpWY"""7"
+.dWZZZZXZb(nT,4yrwZ ``````````````.(#ZdHYYUW. ```
+J(HZuZuWkdHah`....`````.``.`.```.,YWSXBWHn,```
+I(XZZuZdWHWR+__` ``.``. `.7```.J:iJWVG.   Tk,`
+0duZWZZPHppMHh,.````````   .-3+7!(Y^..(1 `  ?X+..
+_JUZZKZX`.WfWTWpb?77<<?dI<?!(?`  _.(!`.4J{.    (1Z
+
+
+
+techchan:
+ saisho no tekiha yowakatta kedo, tsugi ha donna teki ga kurunokana.
+
+[press Enter Key]
+
+
+
+
+# 他の機能の出力の際に十分に示せたと思われる機能(標準で動作する拡張機能)
+
+## リストの代わりに半角スペースで区切った文字列を受け取って、半角スペースで区切った文字列を返すようにする
+    これは、これまで示した出力が動作例といって差し支えないと思います。
+
+##　所要時間を表示する機能
+    これは、これまで示した出力が動作例といって差し支えないと思います。
+
+## 所要時間が短い順に出力する機能
+    入力個数分出す機能、などの動作例が動作例といって差し支えないと思います。
+
+## 新幹線の追加
+    標準で使うようにしています。
